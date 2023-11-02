@@ -8,6 +8,7 @@ import Symbols._
 import Flags._
 import StdNames._
 import dotty.tools.dotc.ast.tpd
+import dotty.tools.dotc.transform.init.Util.isMutable
 
 
 
@@ -45,14 +46,15 @@ class ArrayApply extends MiniPhase {
         case _ =>
           tree
 
-    else if isListOrSeqModuleApply(tree.symbol) then
+    else if isSeqApply(tree) then
+      println("Succsess")
       tree.args match
         // <List or Seq>(a, b, c) ~> new ::(a, new ::(b, new ::(c, Nil))) but only for reference types
         case StripAscription(Apply(wrapArrayMeth, List(StripAscription(rest: tpd.JavaSeqLiteral)))) :: Nil
           if defn.WrapArrayMethods().contains(wrapArrayMeth.symbol) &&
             rest.elems.lengthIs < transformListApplyLimit =>
           rest.elems.foldRight(tpd.ref(defn.NilModule)): (elem, acc) => 
-            tpd.New(defn.ConsType, List(elem, acc))
+            tpd.New(defn.ConsType, List(elem.ensureConforms(defn.ObjectType), acc))
 
         case _ =>
           tree
@@ -63,8 +65,25 @@ class ArrayApply extends MiniPhase {
     sym.name == nme.apply
     && (sym.owner == defn.ArrayModuleClass || (sym.owner == defn.IArrayModuleClass && !sym.is(Extension)))
 
-  private def isListOrSeqModuleApply(sym: Symbol)(using Context): Boolean =
-    sym == defn.ListModule_apply || sym == defn.SeqModule_apply
+  private def isListApply(tree: Tree)(using Context): Boolean =
+    (tree.symbol == defn.ListModule_apply || tree.symbol.name == nme.apply) && scala.PartialFunction.cond(tree) {
+      case Apply(Select(qual, name), rest) =>
+        // println(s"qual: $qual")
+        // println(s"name: $name")
+        // println(s"rest: $rest")
+        (qual.symbol == defn.ListModule) 
+    }
+
+  private def isSeqApply(tree: Tree)(using Context): Boolean = isListApply(tree) || {
+    (tree.symbol == defn.Seq_apply) && (tree match {
+      case Apply(Select(qual, name), rest) =>
+        // println(s"qual: $qual")
+        // println(s"name: $name")
+        // println(s"rest: $rest")
+        qual.symbol == defn.SeqFactoryClass
+      case _ => false
+    })
+  }
 
   /** Only optimize when classtag if it is one of
    *  - `ClassTag.apply(classOf[XYZ])`
